@@ -40,11 +40,20 @@ then `SEVIR_ROOT=./sevir python train.py`. Train/test split is the published one
 | Dashboard | `frontend/index.html` |
 | Verification | `eval/metrics.py`, `eval/run_eval.py` |
 
-## Dashboard
-Layers (radar/nowcast, lightning, hail, cloudburst, CI), U-Net vs optical-flow toggle, lead-time slider (0–120 min),
-replay scrubber + event picker, storm cells with tracks (click for SHAP reasons), per-asset arrival countdown,
-alert cards (Ack / Hit / False alarm / Miss → thresholds self-adjust per audience), CAP XML per alert, and the
-held-out validation chart.
+## Dashboard (MVP of the architecture poster)
+`/` walks the **forecaster flow** from `convective-nowcasting-architecture.pdf`:
+1. **Secure login** — email + OTP, roles Forecaster / Admin / Viewer (viewer is read-only). Demo mode shows the OTP on screen.
+2. **Live dashboard** — map, active-alert count, subscribed locations, data-latency indicator.
+3. **Select storm / location** — click a cell or search a location / storm ID.
+4. **Storm detail** — position, speed, direction, growth trend, arrival window + probability (9-member motion ensemble), radar + satellite loop with past/forecast scrubber.
+5. **AI analysis** — per-source contribution (radar / satellite / lightning, from SHAP), top indicators, most-similar past storms.
+6. **Genuine threat?** — AI-proposed alerts wait for review: YES → issue, NO → dismiss with reason.
+7. **Issue + notify** — severity, area, validity, operator notes; SMS / WhatsApp / email / webhook / in-app (mock unless Twilio / `WEBHOOK_URL` set), CAP 1.2 per alert.
+8. **Field response** — audience-specific action checklist.
+9. **Outcome** — hit / false alarm / miss + notes + photo → per-audience thresholds recalibrate.
+
+Other tabs: **Alerts & learning** (records, delivery log, threshold history), **Pipeline** (live status of stages 2A–2G and 3A–3F),
+**Validation** (CSI / FSS by lead vs baselines). The previous single-page dashboard is at `/classic`.
 
 ## Known limits
 - Hail truth is a proxy (severe VIL core under cold tops); join SPC/IMD hail reports for real labels.
