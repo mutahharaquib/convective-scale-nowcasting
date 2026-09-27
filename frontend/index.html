@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deadlock Nowcast</title>
+<link href="/static/vendor/maplibre-gl.css" rel="stylesheet">
+<script src="/static/vendor/maplibre-gl.js"></script>
+<style>
+:root{--bg:#0f1419;--panel:#161d25;--line:#26313d;--txt:#d8e1ea;--mut:#8394a5;--acc:#3ea6ff;--red:#ff4d4f;--amb:#ffb020;--grn:#35c46a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.4 system-ui,Segoe UI,sans-serif;display:grid;grid-template-columns:380px 1fr;height:100vh}
+#side{overflow-y:auto;border-right:1px solid var(--line);padding:12px}#map{position:relative}
+h1{font-size:17px;margin:0 0 4px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:16px 0 6px}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-weight:700;font-size:11px}.replay{background:var(--amb);color:#000}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:6px}
+button,select{background:#223040;color:var(--txt);border:1px solid var(--line);border-radius:4px;padding:4px 8px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+input[type=range]{width:100%}.mut{color:var(--mut)}.sev{height:4px;border-radius:2px;background:var(--red);margin:4px 0}
+table{width:100%;border-collapse:collapse}td,th{padding:2px 4px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:500}
+.esc{background:var(--red);color:#fff}.new{animation:flash 1.2s 2}@keyframes flash{50%{background:#4a2a10}}
+#bar{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(15,20,25,.92);border:1px solid var(--line);border-radius:6px;padding:8px 12px;z-index:2}
+#legend{position:absolute;top:12px;right:12px;background:rgba(15,20,25,.9);border:1px solid var(--line);border-radius:6px;padding:8px;z-index:2;font-size:11px}
+.sw{display:inline-block;width:14px;height:10px;margin-right:3px;vertical-align:middle}
+.eta{font-size:18px;font-weight:700}
+@media (max-width:800px){body{grid-template-columns:1fr;grid-template-rows:55vh auto}#map{order:-1}}
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>Deadlock Nowcast <span class="badge replay">REPLAY</span></h1>
+  <div class="mut" id="srcnote">0–2 h convective nowcast · SIH 26084</div>
+
+  <h2>Replay</h2>
+  <div class="row"><select id="evsel"></select><button id="play">⏸ Pause</button></div>
+
+  <h2>Layers</h2>
+  <div class="row">
+    <label><input type="checkbox" data-l="radar" checked> Radar/Nowcast</label>
+    <label><input type="checkbox" data-l="lightning" checked> Lightning</label>
+    <label><input type="checkbox" data-l="hail"> Hail</label>
+    <label><input type="checkbox" data-l="cloudburst"> Cloudburst</label>
+    <label><input type="checkbox" data-l="ci" checked> Initiation (CI)</label>
+    <label class="mut" title="Needs Doppler radial velocity (DWR via MOSDAC) — roadmap"><input type="checkbox" disabled> Downburst (roadmap: needs Doppler velocity)</label>
+  </div>
+  <div class="row" style="margin-top:6px">Model:
+    <label><input type="radio" name="m" value="unet" checked> U-Net (primary)</label>
+    <label><input type="radio" name="m" value="of"> Optical flow (baseline)</label>
+  </div>
+
+  <h2>Arrival countdown</h2><div id="assets"></div>
+  <h2>Alerts <span class="mut" id="thr"></span></h2><div id="alerts"></div>
+  <h2>Storm cells</h2>
+  <table><thead><tr><th>ID</th><th>Status</th><th>VIL</th><th>km/h</th><th>Hail p</th></tr></thead><tbody id="cells"></tbody></table>
+  <h2>Validation (held-out)</h2><div id="eval" class="card mut">no eval yet — run python -m eval.run_eval</div>
+</div>
+<div id="map">
+  <div id="legend">
+    <div><b>VIL</b> <span class="sw" style="background:#28c85a"></span>16 <span class="sw" style="background:#fae628"></span>74 <span class="sw" style="background:#fa8c14"></span>133 <span class="sw" style="background:#e61e1e"></span>160 <span class="sw" style="background:#c800c8"></span>219</div>
+    <div><span class="sw" style="background:#ffff5a"></span>lightning <span class="sw" style="background:#00dcff"></span>hail <span class="sw" style="background:#285aff"></span>cloudburst <span class="sw" style="background:#ff50c8"></span>CI</div>
+  </div>
+  <div id="bar">
+    <div class="row" style="justify-content:space-between"><b id="clock">—</b><span id="leadlbl" class="mut">showing observed</span></div>
+    <div class="row"><span class="mut" style="width:60px">time</span><input id="scrub" type="range" style="flex:1"></div>
+    <div class="row"><span class="mut" style="width:60px">lead</span><input id="lead" type="range" min="0" max="24" value="0" style="flex:1"></div>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let F = null, ws, bounds = null, mapReady = false, layersOn = {radar:1, lightning:1, hail:0, cloudburst:0, ci:1}, seen = new Set();
+const map = new maplibregl.Map({container:'map', style:{version:8, glyphs:'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+  sources:{b:{type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'], tileSize:256, attribution:'Tiles © Esri'}},
+  layers:[{id:'b', type:'raster', source:'b'}]}, center:[78.49,17.39], zoom:6, preserveDrawingBuffer:true});
+const IMG = ['radar','cloudburst','hail','lightning','ci'];
+const blank = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+function initLayers(b){
+  bounds = b;
+  IMG.forEach(k => { map.addSource(k, {type:'image', url:blank, coordinates:b});
+    map.addLayer({id:k, type:'raster', source:k, paint:{'raster-opacity':0.85, 'raster-resampling':'nearest', 'raster-fade-duration':0}}); });
+  map.addSource('box', {type:'geojson', data:{type:'Feature', geometry:{type:'Polygon', coordinates:[[...b, b[0]]]}}});
+  map.addLayer({id:'box', type:'line', source:'box', paint:{'line-color':'#3ea6ff', 'line-dasharray':[2,2]}});
+  ['tracks','cells','assets','cih'].forEach(k => map.addSource(k, {type:'geojson', data:{type:'FeatureCollection', features:[]}}));
+  map.addLayer({id:'tracks', type:'line', source:'tracks', paint:{'line-color':'#fff', 'line-width':1.5, 'line-opacity':.7}});
+  map.addLayer({id:'cells', type:'circle', source:'cells', paint:{'circle-radius':6, 'circle-color':['interpolate',['linear'],['get','hail_p'],0,'#35c46a',.5,'#ffb020',1,'#ff4d4f'], 'circle-stroke-color':'#fff', 'circle-stroke-width':1}});
+  map.addLayer({id:'cellsl', type:'symbol', source:'cells', layout:{'text-field':['get','sid'], 'text-size':11, 'text-offset':[0,1.2], 'text-font':['Open Sans Regular']}, paint:{'text-color':'#fff', 'text-halo-color':'#000', 'text-halo-width':1}});
+  map.addLayer({id:'cih', type:'circle', source:'cih', paint:{'circle-radius':10, 'circle-color':'rgba(0,0,0,0)', 'circle-stroke-color':'#ff50c8', 'circle-stroke-width':2}});
+  map.addLayer({id:'assets', type:'circle', source:'assets', paint:{'circle-radius':7, 'circle-color':['case',['==',['get','eta'],-1],'#3ea6ff','#ff4d4f'], 'circle-stroke-color':'#fff', 'circle-stroke-width':2}});
+  map.addLayer({id:'assetsl', type:'symbol', source:'assets', layout:{'text-field':['get','label'], 'text-size':12, 'text-offset':[0,-1.4], 'text-font':['Open Sans Regular']}, paint:{'text-color':'#9fd3ff', 'text-halo-color':'#000', 'text-halo-width':1.5}});
+  map.fitBounds([b[3], b[1]], {padding:40, duration:0});
+  map.on('click','cells', e => { const c = F.cells.find(x => x.sid === e.features[0].properties.sid);
+    new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`<div style="color:#000"><b>${c.sid}</b> (${c.event}${c.parents.length>1?' of '+c.parents.join('+'):''})<br>VIL ${c.vil_max}, ${c.speed_kmh} km/h, ${Math.round(c.area_km2)} km²<br>Hail p=${c.hail_p}<br><i>Why:</i> ${c.reasons.map(r=>r.label+' '+r.value).join(', ')||'—'}</div>`).addTo(map); });
+}
+const pt = (lon,lat,p) => ({type:'Feature', geometry:{type:'Point', coordinates:[lon,lat]}, properties:p});
+
+function render(){
+  if (!F) return;
+  if (!bounds && mapReady) initLayers(F.bounds);
+  const lead = +$('#lead').value, model = document.querySelector('input[name=m]:checked').value;
+  const img = {radar: lead ? F[model][lead-1] : F.obs, lightning:F.lightning, hail:F.hail, cloudburst:F.cloudburst, ci:F.ci};
+  if (bounds) IMG.forEach(k => { map.getSource(k).updateImage({url:img[k], coordinates:bounds}); map.setLayoutProperty(k,'visibility', layersOn[k]?'visible':'none'); });
+  $('#leadlbl').textContent = lead ? `${model==='unet'?'U-Net nowcast':'Optical-flow baseline'} · +${lead*5} min` : 'showing observed';
+  const hh = m => `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+  $('#clock').textContent = `${F.event} · T+${hh(F.minutes)} (${F.playing?'▶ replaying':'⏸ paused'})`;
+  $('#srcnote').innerHTML = `Data: <b>${F.source==='SEVIR'?'SEVIR (NEXRAD/GOES/GLM)':'synthetic stand-in'}</b> · replayed, not live · map placement illustrative · state: ${F.state_backend}`;
+  Object.assign($('#scrub'), {min:F.t0, max:F.T, value:F.t});
+  $('#play').textContent = F.playing ? '⏸ Pause' : '▶ Play';
+  $('#evsel').innerHTML = F.events.map((e,i) => `<option value="${i}" ${i===F.event_index?'selected':''}>${e}</option>`).join('');
+  if (bounds) {
+  map.getSource('cells').setData({type:'FeatureCollection', features:F.cells.map(c => pt(c.lon,c.lat,{sid:c.sid, hail_p:c.hail_p}))});
+  map.getSource('tracks').setData({type:'FeatureCollection', features:F.cells.filter(c=>c.track.length>1).map(c => ({type:'Feature', geometry:{type:'LineString', coordinates:c.track}}))});
+  map.getSource('cih').setData({type:'FeatureCollection', features:layersOn.ci ? F.ci_hotspots.map(h => pt(h.lon,h.lat,{})) : []});
+  map.getSource('assets').setData({type:'FeatureCollection', features:F.assets.map(a => pt(a.lon,a.lat,{eta:a.arrival_min??-1, label:a.asset+(a.arrival_min!=null?` · ${a.arrival_min} min`:'')}))});
+  }
+  $('#assets').innerHTML = F.assets.map(a => `<div class="card row" style="justify-content:space-between"><div><b>${a.asset}</b><div class="mut">${a.audience} · hail ${a.hail_p} · cloudburst ${a.cloudburst_p}</div></div><div class="eta" style="color:${a.arrival_min==null?'var(--grn)':a.arrival_min<=30?'var(--red)':'var(--amb)'}">${a.arrival_min==null?'clear':a.arrival_min===0?'NOW':a.arrival_min+'′'}</div></div>`).join('');
+  $('#thr').textContent = 'thresholds ' + Object.entries(F.thresholds).map(([k,v])=>`${k} ${v}`).join(' · ');
+  const st = F.alert_stats;
+  $('#alerts').innerHTML = (F.alerts.length ? '' : '<div class="mut">no active alerts</div>') + F.alerts.map(a => `<div class="card ${F.new_alerts.includes(a.id)?'new':''}">
+    <div class="row" style="justify-content:space-between"><b>${a.hazard.toUpperCase()} · ${a.asset}</b><span>${a.escalated&&!a.acked?'<span class="badge esc">ESCALATED</span> ':''}${a.acked?'✓ acked':''}</span></div>
+    <div class="sev" style="width:${a.severity*100}%"></div><div>${a.text}</div>
+    <div class="mut">severity ${a.severity} · ${a.audience} · <a href="/outbox/${a.id}.cap.xml" target="_blank" style="color:var(--acc)">CAP</a></div>
+    <div class="row" style="margin-top:4px"><button onclick="send({op:'ack',id:'${a.id}'})">Ack</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'hit'})">Hit</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'false_alarm'})">False alarm</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'miss'})">Miss</button></div></div>`).join('')
+    + `<div class="mut">raised ${st.raised} · de-duplicated ${st.suppressed_dedup} · a single fixed 0.40 threshold would have raised ${st.fixed_threshold_would_raise}</div>`;
+  $('#cells').innerHTML = F.cells.map(c => `<tr><td>${c.sid}</td><td>${c.event}</td><td>${c.vil_max}</td><td>${c.speed_kmh}</td><td style="color:${c.hail_p>.5?'var(--red)':'inherit'}">${c.hail_p}</td></tr>`).join('');
+}
+function send(o){ ws.send(JSON.stringify(o)); }
+function connect(){
+  ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws.onmessage = e => { F = JSON.parse(e.data); render(); };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+map.on('error', e => console.log('map error: ' + (e.error && e.error.message)));
+const onReady = () => { if (mapReady) return; mapReady = true; console.log('map ready'); render(); };
+map.on('style.load', onReady); map.on('load', onReady);
+connect();
+$('#play').onclick = () => send({op: F.playing ? 'pause' : 'play'});
+$('#scrub').oninput = e => send({op:'seek', t:+e.target.value});
+$('#evsel').onchange = e => send({op:'event', i:+e.target.value});
+$('#lead').oninput = render;
+document.querySelectorAll('input[name=m]').forEach(r => r.onchange = render);
+document.querySelectorAll('[data-l]').forEach(c => c.onchange = () => { layersOn[c.dataset.l] = c.checked; render(); });
+
+fetch('/api/eval').then(r => r.json()).then(E => {
+  if (!E.methods) return;
+  const W = 340, H = 150, P = 28, col = {persistence:'#8394a5', optical_flow:'#ffb020', unet:'#3ea6ff'};
+  const xs = i => P + i * (W - P - 6) / 23, ys = v => H - P + 4 - v * (H - P - 4);
+  let svg = `<svg width="${W}" height="${H}" style="max-width:100%"><text x="${P}" y="10" fill="#8394a5" font-size="10">CSI @ VIL≥74 vs lead (min) · ${E.n_events} held-out ${E.source} events</text>`;
+  [0, .25, .5, .75, 1].forEach(v => svg += `<line x1="${P}" x2="${W}" y1="${ys(v)}" y2="${ys(v)}" stroke="#26313d"/><text x="2" y="${ys(v)+3}" fill="#8394a5" font-size="9">${v}</text>`);
+  [0, 5, 11, 17, 23].forEach(i => svg += `<text x="${xs(i)-6}" y="${H-4}" fill="#8394a5" font-size="9">${(i+1)*5}</text>`);
+  Object.entries(E.methods).forEach(([m, r]) => svg += `<polyline fill="none" stroke="${col[m]}" stroke-width="2" points="${r['74'].csi.map((v,i)=>xs(i)+','+ys(v)).join(' ')}"/>`);
+  svg += '</svg>';
+  const row = m => { const r = E.methods[m]; return `<tr><td style="color:${col[m]}">${m}</td><td>${r['74'].csi[5]}</td><td>${r['74'].csi[11]}</td><td>${r['74'].csi[23]}</td><td>${r['133'].fss[11]}</td><td>${r.peak_ratio_120min}</td></tr>`; };
+  $('#eval').innerHTML = svg + `<table><tr><th></th><th>CSI 30m</th><th>60m</th><th>120m</th><th>FSS133 60m</th><th>peak</th></tr>${Object.keys(E.methods).map(row).join('')}</table>
+    <div style="margin-top:4px">CI (30 min ahead): POD ${E.ci.pod} · FAR ${E.ci.far} · CSI ${E.ci.csi}</div>`;
+});
+</script>
+</body>
+</html>
