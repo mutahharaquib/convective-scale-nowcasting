@@ -1,0 +1,15 @@
+numpy
+scipy
+opencv-python-headless
+scikit-learn
+shap
+h5py
+pandas
+matplotlib
+fastapi
+uvicorn[standard]
+redis
+sqlalchemy
+psycopg2-binary
+httpx
+# pysteps   # optional: used automatically as the optical-flow baseline if installed

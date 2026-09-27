@@ -1,0 +1,5 @@
+.git
+sevir
+*.db
+alerts/outbox
+*.pdf

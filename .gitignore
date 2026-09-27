@@ -1,0 +1,8 @@
+__pycache__/
+*.db
+alerts/outbox/
+sevir/
+.venv/
+server.log
+nowcast.db
+*.log
