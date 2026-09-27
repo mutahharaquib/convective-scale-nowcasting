@@ -111,7 +111,7 @@ function render(){
   $('#thr').textContent = 'thresholds ' + Object.entries(F.thresholds).map(([k,v])=>`${k} ${v}`).join(' · ');
   const st = F.alert_stats;
   $('#alerts').innerHTML = (F.alerts.length ? '' : '<div class="mut">no active alerts</div>') + F.alerts.map(a => `<div class="card ${F.new_alerts.includes(a.id)?'new':''}">
-    <div class="row" style="justify-content:space-between"><b>${a.hazard.toUpperCase()} · ${a.asset}</b><span>${a.escalated&&!a.acked?'<span class="badge esc">ESCALATED</span> ':''}${a.acked?'✓ acked':''}</span></div>
+    <div class="row" style="justify-content:space-between"><b>${a.hazard.toUpperCase()} · ${a.asset}</b><span>${a.escalated&&!a.acked?'<span class="badge esc">ESCALATED</span> ':''}${a.status!=="review"?"✓ "+a.status:""}</span></div>
     <div class="sev" style="width:${a.severity*100}%"></div><div>${a.text}</div>
     <div class="mut">severity ${a.severity} · ${a.audience} · <a href="/outbox/${a.id}.cap.xml" target="_blank" style="color:var(--acc)">CAP</a></div>
     <div class="row" style="margin-top:4px"><button onclick="send({op:'ack',id:'${a.id}'})">Ack</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'hit'})">Hit</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'false_alarm'})">False alarm</button><button onclick="send({op:'feedback',id:'${a.id}',outcome:'miss'})">Miss</button></div></div>`).join('')
@@ -120,9 +120,10 @@ function render(){
 }
 function send(o){ ws.send(JSON.stringify(o)); }
 function connect(){
-  ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-  ws.onmessage = e => { F = JSON.parse(e.data); render(); };
-  ws.onclose = () => setTimeout(connect, 1500);
+  let tok = ''; try { tok = JSON.parse(sessionStorage.getItem('sess') || '{}').token || ''; } catch (e) {}
+  ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws?token=${encodeURIComponent(tok)}`);
+  ws.onmessage = e => { const m = JSON.parse(e.data); if (m.error) return; F = m; F.alerts = F.alerts.filter(a => a.event === F.event && a.status !== 'dismissed' && a.status !== 'closed'); render(); };
+  ws.onclose = e => { if (e.code === 4401) { location.href = '/'; return; } setTimeout(connect, 1500); };
 }
 map.on('error', e => console.log('map error: ' + (e.error && e.error.message)));
 const onReady = () => { if (mapReady) return; mapReady = true; console.log('map ready'); render(); };
