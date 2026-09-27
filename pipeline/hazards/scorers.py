@@ -58,9 +58,12 @@ class Explainer:
         import shap
         self.e = shap.TreeExplainer(model, background[:200])
 
-    def reasons(self, feats, k=3):
+    def shap(self, feats):
         x = np.array([[feats[f] for f in FEATURES]])
-        sv = np.array(self.e.shap_values(x)).reshape(-1)[-len(FEATURES):]
+        return np.array(self.e.shap_values(x)).reshape(-1)[-len(FEATURES):]
+
+    def reasons(self, feats, k=3, sv=None):
+        sv = self.shap(feats) if sv is None else sv
         order = np.argsort(-sv)[:k]
         return [dict(feature=FEATURES[i], label=LABEL[FEATURES[i]], value=round(feats[FEATURES[i]], 1),
                      contribution=round(float(sv[i]), 3)) for i in order if sv[i] > 0]
