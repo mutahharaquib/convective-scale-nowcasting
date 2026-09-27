@@ -66,8 +66,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:2px 4px;text-align:left;
 <script>
 const $ = s => document.querySelector(s);
 let F = null, ws, bounds = null, mapReady = false, layersOn = {radar:1, lightning:1, hail:0, cloudburst:0, ci:1}, seen = new Set();
-const map = new maplibregl.Map({container:'map', style:{version:8, glyphs:'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-  sources:{b:{type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'], tileSize:256, attribution:'Tiles © Esri'}},
+const map = new maplibregl.Map({container:'map', style:{version:8, sources:{b:{type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'], tileSize:256, attribution:'Tiles © Esri'}},
   layers:[{id:'b', type:'raster', source:'b'}]}, center:[78.49,17.39], zoom:6, preserveDrawingBuffer:true});
 const IMG = ['radar','cloudburst','hail','lightning','ci'];
 const blank = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -75,16 +74,14 @@ const blank = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcS
 function initLayers(b){
   bounds = b;
   IMG.forEach(k => { map.addSource(k, {type:'image', url:blank, coordinates:b});
-    map.addLayer({id:k, type:'raster', source:k, paint:{'raster-opacity':0.85, 'raster-resampling':'nearest', 'raster-fade-duration':0}}); });
+    map.addLayer({id:k, type:'raster', source:k, paint:{'raster-opacity':0.85, 'raster-fade-duration':0}}); });
   map.addSource('box', {type:'geojson', data:{type:'Feature', geometry:{type:'Polygon', coordinates:[[...b, b[0]]]}}});
   map.addLayer({id:'box', type:'line', source:'box', paint:{'line-color':'#3ea6ff', 'line-dasharray':[2,2]}});
   ['tracks','cells','assets','cih'].forEach(k => map.addSource(k, {type:'geojson', data:{type:'FeatureCollection', features:[]}}));
   map.addLayer({id:'tracks', type:'line', source:'tracks', paint:{'line-color':'#fff', 'line-width':1.5, 'line-opacity':.7}});
   map.addLayer({id:'cells', type:'circle', source:'cells', paint:{'circle-radius':6, 'circle-color':['interpolate',['linear'],['get','hail_p'],0,'#35c46a',.5,'#ffb020',1,'#ff4d4f'], 'circle-stroke-color':'#fff', 'circle-stroke-width':1}});
-  map.addLayer({id:'cellsl', type:'symbol', source:'cells', layout:{'text-field':['get','sid'], 'text-size':11, 'text-offset':[0,1.2], 'text-font':['Open Sans Regular']}, paint:{'text-color':'#fff', 'text-halo-color':'#000', 'text-halo-width':1}});
   map.addLayer({id:'cih', type:'circle', source:'cih', paint:{'circle-radius':10, 'circle-color':'rgba(0,0,0,0)', 'circle-stroke-color':'#ff50c8', 'circle-stroke-width':2}});
   map.addLayer({id:'assets', type:'circle', source:'assets', paint:{'circle-radius':7, 'circle-color':['case',['==',['get','eta'],-1],'#3ea6ff','#ff4d4f'], 'circle-stroke-color':'#fff', 'circle-stroke-width':2}});
-  map.addLayer({id:'assetsl', type:'symbol', source:'assets', layout:{'text-field':['get','label'], 'text-size':12, 'text-offset':[0,-1.4], 'text-font':['Open Sans Regular']}, paint:{'text-color':'#9fd3ff', 'text-halo-color':'#000', 'text-halo-width':1.5}});
   map.fitBounds([b[3], b[1]], {padding:40, duration:0});
   map.on('click','cells', e => { const c = F.cells.find(x => x.sid === e.features[0].properties.sid);
     new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`<div style="color:#000"><b>${c.sid}</b> (${c.event}${c.parents.length>1?' of '+c.parents.join('+'):''})<br>VIL ${c.vil_max}, ${c.speed_kmh} km/h, ${Math.round(c.area_km2)} km²<br>Hail p=${c.hail_p}<br><i>Why:</i> ${c.reasons.map(r=>r.label+' '+r.value).join(', ')||'—'}</div>`).addTo(map); });
